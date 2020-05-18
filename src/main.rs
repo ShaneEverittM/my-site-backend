@@ -21,7 +21,7 @@ fn hello(name: &RawStr) -> Json<Greeting> {
         message: format!("Hello, {}!", name.as_str()).into(),
     })
 }
-
+// Because CORS be like that
 fn make_cors() -> Cors {
     let allowed_origins = AllowedOrigins::some_exact(&["http://localhost:3000"]);
     CorsOptions {
