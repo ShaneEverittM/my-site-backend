@@ -5,7 +5,7 @@ use rocket::http::RawStr;
 use rocket::State;
 use rocket::{get, routes};
 use rocket_contrib::json::Json;
-use rocket_cors::{AllowedOrigins, Cors, CorsOptions};
+use rocket_cors::CorsOptions;
 
 use serde::Serialize;
 
@@ -31,20 +31,10 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
     })
 }
 
-fn make_cors() -> Cors {
-    let allowed_origins = AllowedOrigins::some_exact(&["http://localhost:3000"]);
-    CorsOptions {
-        allowed_origins,
-        ..Default::default()
-    }
-    .to_cors()
-    .expect("error while building CORS")
-}
-
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/", routes![hello])
-        .attach(make_cors())
+        .attach(CorsOptions::default().to_cors().unwrap())
         .manage(HitCount(AtomicUsize::new(0)))
 }
 
