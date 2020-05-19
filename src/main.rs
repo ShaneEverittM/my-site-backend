@@ -31,22 +31,16 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
     })
 }
 
-#[get("/secret/<name>")]
-fn secret_hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
-    hit_count.0.fetch_add(1, Ordering::Relaxed);
+#[get("/filesystem")]
+fn filesystem() -> Json<Greeting> {
     Json(Greeting {
-        message: format!(
-            "Psst! Hello, {}! (for the {:?}th time)",
-            name.as_str(),
-            hit_count.0
-        )
-        .into(),
+        message: "This is where the filesystem will go!".into(),
     })
 }
 
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/", routes![hello, secret_hello])
+        .mount("/", routes![hello, filesystem])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(HitCount(AtomicUsize::new(0)))
 }
