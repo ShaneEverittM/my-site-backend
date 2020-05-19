@@ -18,7 +18,7 @@ struct Greeting {
 
 struct HitCount(AtomicUsize);
 
-#[get("/hello/<name>")]
+#[get("/<name>")]
 fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
     hit_count.0.fetch_add(1, Ordering::Relaxed);
     Json(Greeting {
@@ -31,9 +31,22 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
     })
 }
 
+#[get("/secret/<name>")]
+fn secret_hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
+    hit_count.0.fetch_add(1, Ordering::Relaxed);
+    Json(Greeting {
+        message: format!(
+            "Psst! Hello, {}! (for the {:?}th time)",
+            name.as_str(),
+            hit_count.0
+        )
+        .into(),
+    })
+}
+
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/", routes![hello])
+        .mount("/", routes![hello, secret_hello])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(HitCount(AtomicUsize::new(0)))
 }
