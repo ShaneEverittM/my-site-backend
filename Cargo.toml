@@ -10,4 +10,5 @@ edition = "2018"
 rocket = "0.4.4" 
 rocket_cors = "0.5.1"
 rocket_contrib = "0.4.4"
+subprocess = "0.2.4"
 serde = {version = "1.0", features = ["derive"]}
