@@ -1,13 +1,13 @@
 #![feature(proc_macro_hygiene, decl_macro)]
-
 extern crate rocket;
 use rocket::http::RawStr;
 use rocket::State;
-use rocket::{get, routes};
+use rocket::{get, post, routes};
 use rocket_contrib::json::Json;
 use rocket_cors::CorsOptions;
+use std::process::Command;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -31,10 +31,21 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Greeting> {
     })
 }
 
-#[get("/filesystem")]
-fn filesystem() -> Json<Greeting> {
+#[derive(Deserialize)]
+struct MyCommand<'a> {
+    command: &'a str,
+}
+
+#[post("/filesystem", format = "json", data = "<body>")]
+fn filesystem(body: Json<MyCommand>) -> Json<Greeting> {
+    eprintln!("{:?}", body.command);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(body.command)
+        .output()
+        .expect("failed");
     Json(Greeting {
-        message: "This is where the filesystem will go!".into(),
+        message: String::from_utf8(output.stdout).unwrap(),
     })
 }
 
