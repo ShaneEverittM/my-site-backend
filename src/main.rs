@@ -66,22 +66,17 @@ fn read_from_proc(sub_proc: &Popen) -> std::result::Result<String, std::io::Erro
 #[post("/filesystem", format = "json", data = "<body>")]
 fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<SubProcOutput> {
     let Command { mut command } = body.into_inner();
+    command.push('\n');
     let sp_control: &SubProcessControl = sp_state.inner();
     //get the lock once, 4head
     let mut lock = sp_control.sp.lock().unwrap();
     // If some, then just send the command and return the output
     if let Some(sp) = lock.as_mut() {
-        command.push('\n');
         return Json(SubProcOutput {
             msg: send_command(command, sp).unwrap(),
         });
     } else {
         // otherwise spawn and return initial output
-        if command != "init" {
-            return Json(SubProcOutput {
-                msg: String::from("must send init post first"),
-            });
-        }
         *lock = Some(
             Popen::create(
                 &["./fsystem"],
@@ -93,8 +88,10 @@ fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<S
             )
             .expect("Couldn't spawn child process"),
         );
+
+        let _ = read_from_proc(lock.as_ref().unwrap()).unwrap(); //throw away the first output, frontend handles it
         return Json(SubProcOutput {
-            msg: read_from_proc(lock.as_ref().unwrap()).unwrap(),
+            msg: send_command(command, lock.as_ref().unwrap()).unwrap(),
         });
     }
 }
