@@ -51,20 +51,27 @@ fn send_command(command: String, sub_proc: &Popen) -> std::result::Result<String
 }
 
 fn read_from_proc(sub_proc: &Popen) -> std::result::Result<String, std::io::Error> {
-    eprintln!("Going to read");
-    let mut buf: Vec<u8> = Vec::new();
+    // let mut buf: Vec<u8> = Vec::new();
+    let mut buf: Vec<u8> = vec![0; 1024]; // better be big enough otherwise read will block
     let mut reader = BufReader::new(
         sub_proc
             .stdout
             .as_ref()
             .expect("Cannot read a response from a process without stdout redirected"),
     );
-    reader.read_until(b'>', &mut buf)?;
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    reader.read(&mut buf)?;
+    eprintln!("Done");
+    // reader.read_until(b'>', &mut buf)?;
     Ok(String::from_utf8(buf).unwrap())
 }
 
-#[post("/filesystem", format = "json", data = "<body>")]
-fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<SubProcOutput> {
+#[post("/projects/<exe>", format = "json", data = "<body>")]
+fn filesystem(
+    exe: String,
+    body: Json<Command>,
+    sp_state: State<SubProcessControl>,
+) -> Json<SubProcOutput> {
     let Command { mut command } = body.into_inner();
     command.push('\n');
     let sp_control: &SubProcessControl = sp_state.inner();
@@ -77,9 +84,10 @@ fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<S
         });
     } else {
         // otherwise spawn and return initial output
+        let path = String::from("./") + &exe;
         *lock = Some(
             Popen::create(
-                &["./fsystem"],
+                &[path],
                 PopenConfig {
                     stdout: Redirection::Pipe,
                     stdin: Redirection::Pipe,
@@ -88,8 +96,9 @@ fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<S
             )
             .expect("Couldn't spawn child process"),
         );
-
-        let _ = read_from_proc(lock.as_ref().unwrap()).unwrap(); //throw away the first output, frontend handles it
+        if exe != "prmanager" {
+            let _ = read_from_proc(lock.as_ref().unwrap()).unwrap(); //throw away the first output, frontend handles it
+        }
         return Json(SubProcOutput {
             msg: send_command(command, lock.as_ref().unwrap()).unwrap(),
         });
