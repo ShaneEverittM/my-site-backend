@@ -96,7 +96,7 @@ fn filesystem(body: Json<Command>, sp_state: State<SubProcessControl>) -> Json<S
     }
 }
 fn make_cors() -> rocket_cors::Cors {
-    // let allowed_origins = AllowedOrigins::some_exact(&["http://localhost:3000"]); //, "http://192.168.1.49:3000"]);
+    let _allowed_origins = AllowedOrigins::some_exact(&["http://localhost:3000"]); //, "http://192.168.1.49:3000"]);
     CorsOptions {
         allowed_methods: vec![Method::Get, Method::Post, Method::Options]
             .into_iter()
