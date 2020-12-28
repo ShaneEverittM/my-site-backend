@@ -1,5 +1,6 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 extern crate rocket;
+
 use rocket::http::RawStr;
 use rocket::State;
 use rocket::{get, post, routes};
@@ -15,9 +16,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Serialize)]
 struct Response {
     message: String,
-    err: String,
 }
 
+#[derive(Debug)]
 struct HitCount(AtomicUsize);
 
 #[get("/<name>")]
@@ -29,7 +30,6 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Response> {
             name.as_str(),
             hit_count.0
         ),
-        err: "".into(),
     })
 }
 
@@ -37,6 +37,7 @@ fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Response> {
 struct Command {
     command: String,
 }
+
 struct SubProcessControl {
     sp: Arc<Mutex<Option<Popen>>>, //TODO: This should really maintain references to n running processes one for each request origin
 }
@@ -49,7 +50,6 @@ fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Re
         if sub_proc_option.is_some() {
             return Json(Response {
                 message: "aready initialized".into(),
-                err: "".into(),
             });
         }
         *sub_proc_option = Some(
@@ -66,7 +66,6 @@ fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Re
         eprintln!("Created!");
         Json(Response {
             message: "Initialized".into(),
-            err: "".into(),
         })
     } else {
         eprintln!("{:?}", body.command);
@@ -75,7 +74,6 @@ fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Re
         } else {
             return Json(Response {
                 message: "You must initialize first".into(),
-                err: "".into(),
             });
         };
         //let com = sub_proc.communicate_start()
@@ -86,15 +84,13 @@ fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Re
             );
             return Json(Response {
                 message: "The process is exited oops".into(),
-                err: "".into(),
             });
         }
-        let (out, err) = sub_proc
+        let (out, _err) = sub_proc
             .communicate(Some(&format!("{}\n", &body.command)))
             .unwrap();
         Json(Response {
             message: out.unwrap(),
-            err: err.unwrap_or_default(),
         })
     }
 }
@@ -103,9 +99,7 @@ fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/", routes![hello, filesystem])
         .attach(CorsOptions::default().to_cors().unwrap())
-        .manage(SubProcessControl {
-            sp: Arc::new(Mutex::new(None)),
-        })
+        .manage(HitCount(AtomicUsize::new(0)))
 }
 
 fn main() {
