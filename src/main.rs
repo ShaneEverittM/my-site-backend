@@ -1,17 +1,19 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 extern crate rocket;
 
-use rocket::http::RawStr;
+use rocket::http::{RawStr, Status};
 use rocket::State;
 use rocket::{get, post, routes};
 use rocket_contrib::json::Json;
 use rocket_cors::CorsOptions;
-use subprocess::*;
+use std::ffi::OsString;
+use subprocess::{Popen, PopenConfig, Redirection};
 
 use serde::{Deserialize, Serialize};
 
+use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 #[derive(Serialize)]
 struct Response {
@@ -38,18 +40,21 @@ struct Command {
     command: String,
 }
 
+// Arc for thread safe multiple ownership.
+// Mutex for thread safe interior mutability.
+// Option because there might not be a subprocess handle
 struct SubProcessControl {
     sp: Arc<Mutex<Option<Popen>>>, //TODO: This should really maintain references to n running processes one for each request origin
 }
 
 #[post("/filesystem", format = "json", data = "<body>")]
 fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Response> {
-    eprintln!("Recieved command: {}", body.command);
+    eprintln!("Received command: {}", body.command);
     let sub_proc_option: &mut Option<Popen> = &mut process.inner().sp.lock().unwrap();
     if body.command == "init" {
         if sub_proc_option.is_some() {
             return Json(Response {
-                message: "aready initialized".into(),
+                message: "already initialized".into(),
             });
         }
         *sub_proc_option = Some(
@@ -95,10 +100,89 @@ fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Re
     }
 }
 
+fn send_command(command: String, sub_proc: &Popen) -> Result<String, std::io::Error> {
+    sub_proc
+        .stdin
+        .as_ref()
+        .expect("Cannot send a command to a subprocess that does not have stdin redirected")
+        .write_all(command.as_bytes())?;
+    read_from_proc(sub_proc)
+}
+
+fn read_from_proc(sub_proc: &Popen) -> Result<String, std::io::Error> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut reader = BufReader::new(
+        sub_proc
+            .stdout
+            .as_ref()
+            .expect("Cannot read a response from a process without stdout redirected"),
+    );
+    reader.read_until(b'>', &mut buf)?;
+    Ok(String::from_utf8(buf).unwrap())
+}
+
+fn init(maybe_sp: &mut Option<Popen>, name: String) -> Result<String, std::io::Error> {
+    *maybe_sp = Some(
+        Popen::create(
+            &[String::from("./") + &name],
+            PopenConfig {
+                stdout: Redirection::Pipe,
+                stdin: Redirection::Pipe,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    read_from_proc(maybe_sp.as_ref().unwrap())
+}
+
+#[post("/projects/<name>", format = "json", data = "<body>")]
+fn terminal(
+    name: String,
+    body: Json<Command>,
+    sp_control: State<SubProcessControl>,
+) -> Result<String, String> {
+    eprintln!("Received command: {} for program {}", body.command, name);
+
+    let Command { command } = &*body;
+
+    let maybe_sp = &mut *sp_control.sp.lock().unwrap();
+
+    match maybe_sp {
+        None if command == "init" => {
+            // Subprocess is not initialized yet and frontend is sending init command
+            // Initialize normally
+            let output = init(maybe_sp, name).unwrap();
+            Ok(output)
+        }
+        // Subprocess is not initialized yet and frontend is sending some other command
+        // Throw error
+        None => Err(String::from("Process is not initialized")),
+
+        Some(_) if command == "init" => {
+            // There is a currently running subprocess and frontend is sending init command
+            // Reinitialize
+            let output = init(maybe_sp, name).unwrap();
+            Ok(output)
+        }
+        Some(sp) => {
+            // There is a currently running subprocess and frontend is sending some other command
+            // Run the command
+            eprintln!("Running command normally");
+            let output = send_command(command.clone() + "\n", sp).unwrap();
+            dbg!(&output);
+            Ok(output)
+        }
+    }
+}
+
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/", routes![hello, filesystem])
+        .mount("/", routes![hello, terminal])
         .attach(CorsOptions::default().to_cors().unwrap())
+        .manage(SubProcessControl {
+            sp: Arc::new(Mutex::new(None)),
+        })
         .manage(HitCount(AtomicUsize::new(0)))
 }
 
