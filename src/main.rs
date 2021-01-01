@@ -7,12 +7,12 @@ use rocket::State;
 use rocket::{get, post, routes};
 use rocket_contrib::json::Json;
 use rocket_cors::CorsOptions;
-use subprocess::{Popen, PopenConfig, Redirection};
+use subprocess::{Popen, PopenConfig, PopenError, Redirection::Pipe};
 
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -41,50 +41,69 @@ struct Command {
     command: String,
 }
 
-// Arc for thread safe multiple ownership.
-// Mutex for thread safe interior mutability.
-// Option because there might not be a subprocess handle
 struct SubProcessControl {
-    sp: Arc<Mutex<Option<Popen>>>, //TODO: This should really maintain references to n running processes one for each request origin
-    terminators: Arc<Mutex<HashMap<String, ProcInfo>>>,
+    // Arc for thread safe multiple ownership.
+    // Mutex for thread safe interior mutability.
+    // Option because there might not be a subprocess handle.
+    sp: Arc<Mutex<Option<Popen>>>,
+    proc_info: Arc<Mutex<HashMap<String, ProcInfo>>>,
 }
 
-fn send_command(
-    command: &str,
-    sub_proc: &Popen,
-    term: &ProcInfo,
-) -> Result<String, std::io::Error> {
+fn send_command(command: &str, sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
+    // Get write handle to subprocess's stdin.
+    let mut proc_input = sub_proc.stdin.as_ref().expect("stdin is redirected");
+
+    // Send command.
     let nl_command = command.to_owned() + "\n";
-    sub_proc
-        .stdin
-        .as_ref()
-        .expect("stdin is redirected")
-        .write_all(nl_command.as_bytes())?;
+    proc_input.write_all(nl_command.as_bytes())?;
+
+    // Read output resulting from command.
     read_from_proc(sub_proc, term)
 }
 
-fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> Result<String, std::io::Error> {
+fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
+    // Get read handle to subprocess's stdout and create a buffered reader.
+    let proc_output = sub_proc.stdout.as_ref().expect("stdout is redirected");
+    let mut reader = BufReader::new(proc_output);
+
+    // Read until the terminating character. This character is supplied from the config file
+    // and is guaranteed to only appear after the subprocess is done printing. In the case of
+    // shell style interfaces, this will be the prompt, in other cases it will just be eof.
     let mut buf: Vec<u8> = Vec::new();
-    let mut reader = BufReader::new(sub_proc.stdout.as_ref().expect("stdout is redirected"));
     reader.read_until(term.term_char as u8, &mut buf)?;
-    let mut output = String::from_utf8(buf).unwrap();
+
+    // Ignore bad characters.
+    let mut output = String::from_utf8_lossy(&buf).to_string();
+
+    // Strip process's prompt in favor of the frontend terminal's prompt.
     output = output[0..(output.len() - (term.term_len + 1))].to_string();
+
     Ok(output)
 }
 
-fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> Result<String, std::io::Error> {
-    *maybe_sp = Some(
-        Popen::create(
-            &[&term.path],
-            PopenConfig {
-                stdout: Redirection::Pipe,
-                stdin: Redirection::Pipe,
-                ..Default::default()
-            },
-        )
-        .unwrap(),
-    );
-    read_from_proc(maybe_sp.as_ref().unwrap(), term)
+fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> io::Result<String> {
+    // Configuration for the subprocess, must redirect stdin and stdout in order to forward
+    // user commands and send output to frontend.
+    let config = PopenConfig {
+        stdout: Pipe,
+        stdin: Pipe,
+        ..Default::default()
+    };
+
+    // Create subprocess from backend root relative path.
+    let new_sp = Popen::create(&[&term.path], config).map_err(|popen_err| match popen_err {
+        PopenError::IoError(e) => e,
+        PopenError::LogicError(msg) => io::Error::new(io::ErrorKind::InvalidInput, msg),
+        _ => io::Error::new(io::ErrorKind::InvalidInput, "Unrecognized error variant"),
+    })?;
+
+    // Read first output from process.
+    let output = read_from_proc(&new_sp, term)?;
+
+    // Place new subprocess handle in state.
+    *maybe_sp = Some(new_sp);
+
+    Ok(output)
 }
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
@@ -101,7 +120,7 @@ fn terminal(
     let Command { command } = &*body;
 
     let mut sub_proc_opt = sp_control.sp.lock().unwrap();
-    let sub_proc_settings = sp_control.terminators.lock().unwrap();
+    let sub_proc_settings = sp_control.proc_info.lock().unwrap();
     let term = sub_proc_settings.get(&program_name).unwrap();
 
     if sub_proc_opt.is_none() {
@@ -146,7 +165,7 @@ fn rocket() -> rocket::Rocket {
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(SubProcessControl {
             sp: Arc::new(Mutex::new(None)),
-            terminators: Arc::new(Mutex::new(settings_map)),
+            proc_info: Arc::new(Mutex::new(settings_map)),
         })
         .manage(HitCount(AtomicUsize::new(0)))
 }
