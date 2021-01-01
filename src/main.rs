@@ -2,17 +2,14 @@
 extern crate rocket;
 
 use config::Config;
-use rocket::http::RawStr;
-use rocket::State;
-use rocket::{get, post, routes};
+use rocket::{get, http::RawStr, post, response::Responder, routes, Request, State};
 use rocket_contrib::json::Json;
 use rocket_cors::CorsOptions;
-use subprocess::{Popen, PopenConfig, PopenError, Redirection::Pipe};
-
 use serde::{Deserialize, Serialize};
+use subprocess::{Popen, PopenConfig, PopenError, Redirection};
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -45,7 +42,7 @@ struct SubProcessControl {
     // Arc for thread safe multiple ownership.
     // Mutex for thread safe interior mutability.
     // Option because there might not be a subprocess handle.
-    sp: Arc<Mutex<Option<Popen>>>,
+    sub_proc: Arc<Mutex<Option<Popen>>>,
     proc_info: Arc<Mutex<HashMap<String, ProcInfo>>>,
 }
 
@@ -70,7 +67,9 @@ fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
     // and is guaranteed to only appear after the subprocess is done printing. In the case of
     // shell style interfaces, this will be the prompt, in other cases it will just be eof.
     let mut buf: Vec<u8> = Vec::new();
+    // let mut buf = [0; 6];
     reader.read_until(term.term_char as u8, &mut buf)?;
+    // reader.read_exact(&mut buf)?;
 
     // Ignore bad characters.
     let mut output = String::from_utf8_lossy(&buf).to_string();
@@ -85,8 +84,9 @@ fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> io::Result<String> {
     // Configuration for the subprocess, must redirect stdin and stdout in order to forward
     // user commands and send output to frontend.
     let config = PopenConfig {
-        stdout: Pipe,
-        stdin: Pipe,
+        stderr: Redirection::Merge,
+        stdout: Redirection::Pipe,
+        stdin: Redirection::Pipe,
         ..Default::default()
     };
 
@@ -105,45 +105,82 @@ fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> io::Result<String> {
 
     Ok(output)
 }
+#[derive(Debug)]
+struct ErrString(String);
+
+impl<'r> Responder<'r> for ErrString {
+    fn respond_to(self, request: &Request) -> rocket::response::Result<'r> {
+        self.0.respond_to(request)
+    }
+}
+
+impl From<std::io::Error> for ErrString {
+    fn from(e: std::io::Error) -> Self {
+        ErrString(e.to_string())
+    }
+}
+impl From<&str> for ErrString {
+    fn from(s: &str) -> Self {
+        ErrString(s.to_owned())
+    }
+}
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
 fn terminal(
     program_name: String,
     body: Json<Command>,
     sp_control: State<SubProcessControl>,
-) -> Result<String, String> {
-    eprintln!(
-        "Received command: {} for program {}",
-        body.command, program_name
-    );
+) -> Result<String, ErrString> {
+    // Pull command out of request body.
+    let Command { ref command } = body.into_inner();
 
-    let Command { command } = &*body;
+    // Get lock for subprocess.
+    // TODO: retrieve based on http session.
+    let mut sub_proc_opt = sp_control
+        .sub_proc
+        .lock()
+        .expect("Thread should not panic with lock");
 
-    let mut sub_proc_opt = sp_control.sp.lock().unwrap();
-    let sub_proc_settings = sp_control.proc_info.lock().unwrap();
-    let term = sub_proc_settings.get(&program_name).unwrap();
+    // Get lock for subprocess info.
+    let sub_proc_settings = sp_control
+        .proc_info
+        .lock()
+        .expect("Thread should not panic with lock");
+
+    // Get the terminating character for the subprocess.
+    let term = match sub_proc_settings.get(&program_name) {
+        Some(term) => term,
+        None => return Err("unrecognized program name".into()),
+    };
 
     if sub_proc_opt.is_none() {
+        // No subprocess.
         if command == "init" {
-            let output = init(&mut sub_proc_opt, term).unwrap();
-            Ok(output)
+            // Frontend is (re)-loading the page.
+            init(&mut sub_proc_opt, term).map_err(|e| e.into())
         } else {
-            Err(String::from("Process is not initialized"))
+            // Frontend is trying to send a command.
+            Err("Process is not initialized".into())
         }
     } else if command == "init" {
-        let old = sub_proc_opt.take();
-        if let Err(msg) = old.unwrap().terminate() {
-            eprintln!("{}", msg);
-        }
+        // There is a subprocess and the fronted is (re)-loading the page.
 
-        let output = init(&mut sub_proc_opt, term).unwrap();
-        Ok(output)
+        sub_proc_opt
+            .take()
+            .expect("In this block, old is Some")
+            .terminate()?;
+
+        init(&mut sub_proc_opt, term).map_err(|e| e.into())
     } else {
-        eprintln!("Running command normally");
-
-        let output = send_command(command, &sub_proc_opt.as_ref().unwrap(), term).unwrap();
-        dbg!(&output);
-        Ok(output)
+        // There is a subprocess and the frontend is sending a command to it.
+        send_command(
+            command,
+            &sub_proc_opt
+                .as_ref()
+                .expect("In this block, sub_proc_opt is Some"),
+            term,
+        )
+        .map_err(|e| e.into())
     }
 }
 
@@ -164,7 +201,7 @@ fn rocket() -> rocket::Rocket {
         .mount("/", routes![hello, terminal])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(SubProcessControl {
-            sp: Arc::new(Mutex::new(None)),
+            sub_proc: Arc::new(Mutex::new(None)),
             proc_info: Arc::new(Mutex::new(settings_map)),
         })
         .manage(HitCount(AtomicUsize::new(0)))

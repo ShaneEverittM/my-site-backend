@@ -4,9 +4,9 @@
     "term_char": ">",
     "term_len": 5
   },
-  "other": {
-    "path": "./bins/nothing",
-    "term_char": "x",
-    "term_len": 3
+  "bash": {
+    "path": "bash",
+    "term_char": "$",
+    "term_len": 0
   }
 }
