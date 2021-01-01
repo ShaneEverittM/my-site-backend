@@ -1,19 +1,20 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 extern crate rocket;
 
-use rocket::http::{RawStr, Status};
+use config::Config;
+use rocket::http::RawStr;
 use rocket::State;
 use rocket::{get, post, routes};
 use rocket_contrib::json::Json;
 use rocket_cors::CorsOptions;
-use std::ffi::OsString;
 use subprocess::{Popen, PopenConfig, Redirection};
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 #[derive(Serialize)]
 struct Response {
@@ -45,86 +46,36 @@ struct Command {
 // Option because there might not be a subprocess handle
 struct SubProcessControl {
     sp: Arc<Mutex<Option<Popen>>>, //TODO: This should really maintain references to n running processes one for each request origin
+    terminators: Arc<Mutex<HashMap<String, ProcInfo>>>,
 }
 
-#[post("/filesystem", format = "json", data = "<body>")]
-fn filesystem(body: Json<Command>, process: State<SubProcessControl>) -> Json<Response> {
-    eprintln!("Received command: {}", body.command);
-    let sub_proc_option: &mut Option<Popen> = &mut process.inner().sp.lock().unwrap();
-    if body.command == "init" {
-        if sub_proc_option.is_some() {
-            return Json(Response {
-                message: "already initialized".into(),
-            });
-        }
-        *sub_proc_option = Some(
-            Popen::create(
-                &["./fsystem"],
-                PopenConfig {
-                    stdout: Redirection::Pipe,
-                    stdin: Redirection::Pipe,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        );
-        eprintln!("Created!");
-        Json(Response {
-            message: "Initialized".into(),
-        })
-    } else {
-        eprintln!("{:?}", body.command);
-        let sub_proc = if let Some(sub_proc) = sub_proc_option.as_mut() {
-            sub_proc
-        } else {
-            return Json(Response {
-                message: "You must initialize first".into(),
-            });
-        };
-        //let com = sub_proc.communicate_start()
-        if let Some(e_status) = sub_proc.poll() {
-            eprintln!(
-                "The subprocess has terminated with exit status: {:?}",
-                e_status
-            );
-            return Json(Response {
-                message: "The process is exited oops".into(),
-            });
-        }
-        let (out, _err) = sub_proc
-            .communicate(Some(&format!("{}\n", &body.command)))
-            .unwrap();
-        Json(Response {
-            message: out.unwrap(),
-        })
-    }
-}
-
-fn send_command(command: String, sub_proc: &Popen) -> Result<String, std::io::Error> {
+fn send_command(
+    command: &str,
+    sub_proc: &Popen,
+    term: &ProcInfo,
+) -> Result<String, std::io::Error> {
+    let nl_command = command.to_owned() + "\n";
     sub_proc
         .stdin
         .as_ref()
-        .expect("Cannot send a command to a subprocess that does not have stdin redirected")
-        .write_all(command.as_bytes())?;
-    read_from_proc(sub_proc)
+        .expect("stdin is redirected")
+        .write_all(nl_command.as_bytes())?;
+    read_from_proc(sub_proc, term)
 }
 
-fn read_from_proc(sub_proc: &Popen) -> Result<String, std::io::Error> {
+fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> Result<String, std::io::Error> {
     let mut buf: Vec<u8> = Vec::new();
-    let mut reader = BufReader::new(
-        sub_proc
-            .stdout
-            .as_ref()
-            .expect("Cannot read a response from a process without stdout redirected"),
-    );
-    reader.read_until(b'>', &mut buf)?;
-    Ok(String::from_utf8(buf).unwrap())
+    let mut reader = BufReader::new(sub_proc.stdout.as_ref().expect("stdout is redirected"));
+    reader.read_until(term.term_char as u8, &mut buf)?;
+    let mut output = String::from_utf8(buf).unwrap();
+    output = output[0..(output.len() - (term.term_len + 1))].to_string();
+    Ok(output)
 }
 
-fn init(maybe_sp: &mut Option<Popen>, name: String) -> Result<String, std::io::Error> {
+fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> Result<String, std::io::Error> {
     *maybe_sp = Some(
         Popen::create(
-            &[String::from("./") + &name],
+            &[&term.path],
             PopenConfig {
                 stdout: Redirection::Pipe,
                 stdin: Redirection::Pipe,
@@ -133,55 +84,69 @@ fn init(maybe_sp: &mut Option<Popen>, name: String) -> Result<String, std::io::E
         )
         .unwrap(),
     );
-    read_from_proc(maybe_sp.as_ref().unwrap())
+    read_from_proc(maybe_sp.as_ref().unwrap(), term)
 }
 
-#[post("/projects/<name>", format = "json", data = "<body>")]
+#[post("/projects/<program_name>", format = "json", data = "<body>")]
 fn terminal(
-    name: String,
+    program_name: String,
     body: Json<Command>,
     sp_control: State<SubProcessControl>,
 ) -> Result<String, String> {
-    eprintln!("Received command: {} for program {}", body.command, name);
+    eprintln!(
+        "Received command: {} for program {}",
+        body.command, program_name
+    );
 
     let Command { command } = &*body;
 
-    let maybe_sp = &mut *sp_control.sp.lock().unwrap();
+    let mut sub_proc_opt = sp_control.sp.lock().unwrap();
+    let sub_proc_settings = sp_control.terminators.lock().unwrap();
+    let term = sub_proc_settings.get(&program_name).unwrap();
 
-    match maybe_sp {
-        None if command == "init" => {
-            // Subprocess is not initialized yet and frontend is sending init command
-            // Initialize normally
-            let output = init(maybe_sp, name).unwrap();
+    if sub_proc_opt.is_none() {
+        if command == "init" {
+            let output = init(&mut sub_proc_opt, term).unwrap();
             Ok(output)
+        } else {
+            Err(String::from("Process is not initialized"))
         }
-        // Subprocess is not initialized yet and frontend is sending some other command
-        // Throw error
-        None => Err(String::from("Process is not initialized")),
+    } else if command == "init" {
+        let old = sub_proc_opt.take();
+        if let Err(msg) = old.unwrap().terminate() {
+            eprintln!("{}", msg);
+        }
 
-        Some(_) if command == "init" => {
-            // There is a currently running subprocess and frontend is sending init command
-            // Reinitialize
-            let output = init(maybe_sp, name).unwrap();
-            Ok(output)
-        }
-        Some(sp) => {
-            // There is a currently running subprocess and frontend is sending some other command
-            // Run the command
-            eprintln!("Running command normally");
-            let output = send_command(command.clone() + "\n", sp).unwrap();
-            dbg!(&output);
-            Ok(output)
-        }
+        let output = init(&mut sub_proc_opt, term).unwrap();
+        Ok(output)
+    } else {
+        eprintln!("Running command normally");
+
+        let output = send_command(command, &sub_proc_opt.as_ref().unwrap(), term).unwrap();
+        dbg!(&output);
+        Ok(output)
     }
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct ProcInfo {
+    path: String,
+    term_char: char,
+    term_len: usize,
+}
+
 fn rocket() -> rocket::Rocket {
+    let mut settings = Config::default();
+    settings.merge(config::File::with_name("Info")).unwrap();
+    let settings_map = settings.try_into::<HashMap<String, ProcInfo>>().unwrap();
+    dbg!(&settings_map);
+
     rocket::ignite()
         .mount("/", routes![hello, terminal])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(SubProcessControl {
             sp: Arc::new(Mutex::new(None)),
+            terminators: Arc::new(Mutex::new(settings_map)),
         })
         .manage(HitCount(AtomicUsize::new(0)))
 }

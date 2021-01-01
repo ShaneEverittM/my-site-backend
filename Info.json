@@ -1,0 +1,12 @@
+{
+  "fsystem": {
+    "path": "./bins/fsystem",
+    "term_char": ">",
+    "term_len": 5
+  },
+  "other": {
+    "path": "./bins/nothing",
+    "term_char": "x",
+    "term_len": 3
+  }
+}
