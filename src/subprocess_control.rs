@@ -58,7 +58,6 @@ impl SubProcessControl {
         // Configuration for the subprocess, must redirect stdin and stdout in order to forward
         // user commands and send output to frontend.
         let config = PopenConfig {
-            stderr: Redirection::Merge,
             stdout: Redirection::Pipe,
             stdin: Redirection::Pipe,
             ..Default::default()
