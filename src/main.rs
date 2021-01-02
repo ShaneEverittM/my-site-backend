@@ -1,4 +1,6 @@
 #![feature(proc_macro_hygiene, decl_macro)]
+
+#[macro_use]
 extern crate rocket;
 
 mod routes;
@@ -6,13 +8,11 @@ mod subprocess_control;
 mod types;
 
 use crate::{
-    routes::*,
     subprocess_control::{ProcInfo, SubProcessControl},
     types::HitCount,
 };
 
 use config::Config;
-use rocket::routes;
 use rocket_cors::CorsOptions;
 
 use std::{
@@ -41,7 +41,7 @@ fn initialize_sp_control(config: HashMap<String, ProcInfo>) -> SubProcessControl
 
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
-        .mount("/", routes![hello, bash, project])
+        .mount("/", routes![routes::hello, routes::bash, routes::project])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(initialize_sp_control(read_config()))
         .manage(HitCount(AtomicUsize::new(0)))

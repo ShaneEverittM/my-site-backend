@@ -351,18 +351,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 
 [[package]]
-name = "hello-rocket"
-version = "0.1.0"
-dependencies = [
- "config",
- "rocket",
- "rocket_contrib",
- "rocket_cors",
- "serde 1.0.118",
- "subprocess",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -626,6 +614,18 @@ dependencies = [
  "net2",
  "winapi 0.2.8",
  "ws2_32-sys",
+]
+
+[[package]]
+name = "my-site-backend"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "rocket",
+ "rocket_contrib",
+ "rocket_cors",
+ "serde 1.0.118",
+ "subprocess",
 ]
 
 [[package]]

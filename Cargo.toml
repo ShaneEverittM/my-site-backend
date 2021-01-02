@@ -1,5 +1,5 @@
 [package]
-name = "hello-rocket"
+name = "my-site-backend"
 version = "0.1.0"
 authors = ["ShaneEverittM <shaneemurphy146@gmail.com>"]
 edition = "2018"
