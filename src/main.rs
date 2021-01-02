@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use subprocess::{Popen, PopenConfig, PopenError, Redirection};
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -67,9 +67,7 @@ fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
     // and is guaranteed to only appear after the subprocess is done printing. In the case of
     // shell style interfaces, this will be the prompt, in other cases it will just be eof.
     let mut buf: Vec<u8> = Vec::new();
-    // let mut buf = [0; 6];
     reader.read_until(term.term_char as u8, &mut buf)?;
-    // reader.read_exact(&mut buf)?;
 
     // Ignore bad characters.
     let mut output = String::from_utf8_lossy(&buf).to_string();
@@ -126,7 +124,7 @@ impl From<&str> for ErrString {
 }
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
-fn terminal(
+fn project(
     program_name: String,
     body: Json<Command>,
     sp_control: State<SubProcessControl>,
@@ -184,9 +182,24 @@ fn terminal(
     }
 }
 
+#[post("/projects/bash", format = "json", data = "<body>")]
+fn bash(body: Json<Command>) -> Result<String, ErrString> {
+    if body.command == "init" {
+        Ok("ready".into())
+    } else {
+        let out = subprocess::Exec::shell(&body.command)
+            .stdout(Redirection::Pipe)
+            .capture()
+            .map_err(|e| ErrString(e.to_string()))?
+            .stdout_str();
+        Ok(out)
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProcInfo {
     path: String,
+    override_prompt: String,
     term_char: char,
     term_len: usize,
 }
@@ -198,7 +211,7 @@ fn rocket() -> rocket::Rocket {
     dbg!(&settings_map);
 
     rocket::ignite()
-        .mount("/", routes![hello, terminal])
+        .mount("/", routes![hello, bash, project])
         .attach(CorsOptions::default().to_cors().unwrap())
         .manage(SubProcessControl {
             sub_proc: Arc::new(Mutex::new(None)),

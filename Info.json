@@ -1,11 +1,13 @@
 {
   "fsystem": {
     "path": "./bins/fsystem",
+    "override_prompt": "",
     "term_char": ">",
     "term_len": 5
   },
   "bash": {
     "path": "bash",
+    "override_prompt": "$",
     "term_char": "$",
     "term_len": 0
   }
