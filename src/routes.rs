@@ -3,8 +3,10 @@ use rocket_contrib::json::Json;
 use std::sync::atomic::Ordering;
 use subprocess::Redirection;
 
-use crate::subprocess::{init, send_command};
-use crate::types::{Command, ErrString, HitCount, Response, SubProcessControl};
+use crate::{
+    subprocess_control::SubProcessControl,
+    types::{Command, ErrString, HitCount, Response},
+};
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
 pub fn project(
@@ -38,7 +40,7 @@ pub fn project(
         // No subprocess.
         if command == "init" {
             // Frontend is (re)-loading the page.
-            init(&mut sub_proc_opt, term).map_err(|e| e.into())
+            SubProcessControl::init(&mut sub_proc_opt, term).map_err(|e| e.into())
         } else {
             // Frontend is trying to send a command.
             Err("Process is not initialized".into())
@@ -50,10 +52,10 @@ pub fn project(
             .expect("In this block, old is Some")
             .terminate()?;
 
-        init(&mut sub_proc_opt, term).map_err(|e| e.into())
+        SubProcessControl::init(&mut sub_proc_opt, term).map_err(|e| e.into())
     } else {
         // There is a subprocess and the frontend is sending a command to it.
-        send_command(
+        SubProcessControl::send_command(
             command,
             &sub_proc_opt
                 .as_ref()
