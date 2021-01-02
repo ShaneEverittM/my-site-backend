@@ -1,11 +1,10 @@
-use rocket::{get, http::RawStr, post, State};
+use rocket::{get, post, State};
 use rocket_contrib::json::Json;
-use std::sync::atomic::Ordering;
 use subprocess::Redirection;
 
 use crate::{
     subprocess_control::SubProcessControl,
-    types::{Command, ErrString, HitCount, Response},
+    types::{Command, ErrString, RouteResponse},
 };
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
@@ -13,7 +12,7 @@ pub fn project(
     program_name: String,
     body: Json<Command>,
     sp_control: State<SubProcessControl>,
-) -> Result<String, ErrString> {
+) -> RouteResponse {
     // Pull command out of request body.
     let Command { ref command } = body.into_inner();
 
@@ -40,7 +39,7 @@ pub fn project(
         // No subprocess.
         if command == "init" {
             // Frontend is (re)-loading the page.
-            SubProcessControl::init(&mut sub_proc_opt, term).map_err(|e| e.into())
+            SubProcessControl::init(&mut sub_proc_opt, term)
         } else {
             // Frontend is trying to send a command.
             Err("Process is not initialized".into())
@@ -52,7 +51,7 @@ pub fn project(
             .expect("In this block, old is Some")
             .terminate()?;
 
-        SubProcessControl::init(&mut sub_proc_opt, term).map_err(|e| e.into())
+        SubProcessControl::init(&mut sub_proc_opt, term)
     } else {
         // There is a subprocess and the frontend is sending a command to it.
         SubProcessControl::send_command(
@@ -62,32 +61,23 @@ pub fn project(
                 .expect("In this block, sub_proc_opt is Some"),
             term,
         )
-        .map_err(|e| e.into())
     }
 }
 
 #[post("/projects/bash", format = "json", data = "<body>")]
-pub fn bash(body: Json<Command>) -> Result<String, ErrString> {
+pub fn bash(body: Json<Command>) -> RouteResponse {
     if body.command == "init" {
         Ok("ready".into())
     } else {
-        let out = subprocess::Exec::shell(&body.command)
+        subprocess::Exec::shell(&body.command)
             .stdout(Redirection::Pipe)
             .capture()
             .map_err(|e| ErrString(e.to_string()))?
-            .stdout_str();
-        Ok(out)
+            .stdout_str()
     }
 }
 
 #[get("/<name>")]
-pub fn hello(name: &RawStr, hit_count: State<HitCount>) -> Json<Response> {
-    hit_count.0.fetch_add(1, Ordering::Relaxed);
-    Json(Response {
-        message: format!(
-            "Hello, {}! (for the {:?}th time)",
-            name.as_str(),
-            hit_count.0
-        ),
-    })
+pub fn hello(name: String) -> String {
+    format!("Hello, {}!", name)
 }

@@ -1,12 +1,16 @@
-use rocket::{response::Responder, Request};
-use serde::{Deserialize, Serialize};
-use std::sync::atomic::AtomicUsize;
+use rocket::{
+    response::{self, Responder},
+    Request,
+};
+use serde::Deserialize;
+
+pub type RouteResponse = Result<String, ErrString>;
 
 #[derive(Debug)]
 pub struct ErrString(pub String);
 
 impl<'r> Responder<'r> for ErrString {
-    fn respond_to(self, request: &Request) -> rocket::response::Result<'r> {
+    fn respond_to(self, request: &Request) -> response::Result<'r> {
         self.0.respond_to(request)
     }
 }
@@ -22,15 +26,13 @@ impl From<&str> for ErrString {
     }
 }
 
+impl From<String> for ErrString {
+    fn from(s: String) -> Self {
+        ErrString(s)
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Command {
     pub command: String,
 }
-
-#[derive(Serialize)]
-pub struct Response {
-    pub message: String,
-}
-
-#[derive(Debug)]
-pub struct HitCount(pub AtomicUsize);

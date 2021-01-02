@@ -1,9 +1,12 @@
 use std::io::{self, BufRead, BufReader, Write};
 use subprocess::{Popen, PopenConfig, PopenError, Redirection};
 
+use crate::types::RouteResponse;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+pub type SettingsMap = HashMap<String, ProcInfo>;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProcInfo {
@@ -22,7 +25,14 @@ pub struct SubProcessControl {
 }
 
 impl SubProcessControl {
-    pub fn send_command(command: &str, sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
+    pub fn new(proc_info: SettingsMap) -> Self {
+        Self {
+            sub_proc: Arc::new(Mutex::new(None)),
+            proc_info: Arc::new(Mutex::new(proc_info)),
+        }
+    }
+
+    pub fn send_command(command: &str, sub_proc: &Popen, term: &ProcInfo) -> RouteResponse {
         // Get write handle to subprocess's stdin.
         let mut proc_input = sub_proc.stdin.as_ref().expect("stdin is redirected");
 
@@ -34,7 +44,7 @@ impl SubProcessControl {
         SubProcessControl::read_from_proc(sub_proc, term)
     }
 
-    fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> io::Result<String> {
+    fn read_from_proc(sub_proc: &Popen, term: &ProcInfo) -> RouteResponse {
         // Get read handle to subprocess's stdout and create a buffered reader.
         let proc_output = sub_proc.stdout.as_ref().expect("stdout is redirected");
         let mut reader = BufReader::new(proc_output);
@@ -54,7 +64,7 @@ impl SubProcessControl {
         Ok(output)
     }
 
-    pub fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> io::Result<String> {
+    pub fn init(maybe_sp: &mut Option<Popen>, term: &ProcInfo) -> RouteResponse {
         // Configuration for the subprocess, must redirect stdin and stdout in order to forward
         // user commands and send output to frontend.
         let config = PopenConfig {
