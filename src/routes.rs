@@ -4,7 +4,7 @@ use subprocess::Redirection;
 
 use crate::{
     subprocess_control::SubProcessControl,
-    types::{Command, ErrString, RouteResponse},
+    types::{Command, RouteError::LogicError, RouteResponse},
 };
 
 #[post("/projects/<program_name>", format = "json", data = "<body>")]
@@ -32,7 +32,7 @@ pub fn project(
     // Get the terminating character for the subprocess.
     let term = match sub_proc_settings.get(&program_name) {
         Some(term) => term,
-        None => return Err("unrecognized program name".into()),
+        None => return Err(LogicError("unrecognized program name")),
     };
 
     if sub_proc_opt.is_none() {
@@ -42,7 +42,7 @@ pub fn project(
             SubProcessControl::init(&mut sub_proc_opt, term)
         } else {
             // Frontend is trying to send a command.
-            Err("Process is not initialized".into())
+            Err(LogicError("Process is not initialized"))
         }
     } else if command == "init" {
         // There is a subprocess and the fronted is (re)-loading the page.
@@ -69,11 +69,10 @@ pub fn bash(body: Json<Command>) -> RouteResponse {
     if body.command == "init" {
         Ok("ready".into())
     } else {
-        subprocess::Exec::shell(&body.command)
+        Ok(subprocess::Exec::shell(&body.command)
             .stdout(Redirection::Pipe)
-            .capture()
-            .map_err(|e| ErrString(e.to_string()))?
-            .stdout_str()
+            .capture()?
+            .stdout_str())
     }
 }
 

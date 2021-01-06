@@ -3,34 +3,21 @@ use rocket::{
     Request,
 };
 use serde::Deserialize;
+use thiserror::Error;
 
-pub type RouteResponse = Result<String, ErrString>;
+#[derive(Debug, Error)]
+pub enum RouteError {
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
 
-#[derive(Debug)]
-pub struct ErrString(pub String);
+    #[error(transparent)]
+    PopenError(#[from] subprocess::PopenError),
 
-impl<'r> Responder<'r> for ErrString {
-    fn respond_to(self, request: &Request) -> response::Result<'r> {
-        self.0.respond_to(request)
-    }
+    #[error("invalid input: {0}")]
+    LogicError(&'static str),
 }
 
-impl From<std::io::Error> for ErrString {
-    fn from(e: std::io::Error) -> Self {
-        ErrString(e.to_string())
-    }
-}
-impl From<&str> for ErrString {
-    fn from(s: &str) -> Self {
-        ErrString(s.to_owned())
-    }
-}
-
-impl From<String> for ErrString {
-    fn from(s: String) -> Self {
-        ErrString(s)
-    }
-}
+pub type RouteResponse = Result<String, RouteError>;
 
 #[derive(Deserialize)]
 pub struct Command {
