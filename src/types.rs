@@ -1,7 +1,3 @@
-use rocket::{
-    response::{self, Responder},
-    Request,
-};
 use serde::Deserialize;
 use thiserror::Error;
 
